@@ -60,6 +60,13 @@ export class BackendClient {
     };
   }
 
+  get pid(): number | null {
+    if (this.transport instanceof StdioClientTransport) {
+      return this.transport.pid;
+    }
+    return null;
+  }
+
   async disconnect(): Promise<void> {
     await this.client.close();
   }

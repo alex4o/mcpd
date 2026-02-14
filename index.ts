@@ -74,6 +74,10 @@ async function cmdStart(configPath?: string) {
         cwd: svc.cwd,
         env: svc.env,
       });
+      // Track stdio process PID in service state
+      if (client.pid) {
+        manager.registerPid(name, client.pid);
+      }
     } else {
       continue;
     }

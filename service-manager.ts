@@ -208,9 +208,16 @@ export class ServiceManager {
     }));
   }
 
+  /** Register a PID for a service not directly managed by ServiceManager (e.g. stdio backends). */
+  registerPid(name: string, pid: number): void {
+    this.pids.set(name, pid);
+    this.states.set(name, this.states.get(name) ?? "ready");
+    this.saveState();
+  }
+
   // -- state persistence --
 
-  private saveState(): void {
+  saveState(): void {
     const state: Record<string, Omit<ServiceInfo, "name">> = {};
     const all = new Set([...this.services.keys(), ...this.states.keys()]);
     for (const name of all) {
