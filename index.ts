@@ -187,10 +187,29 @@ async function cmdRestart(target: string | undefined, configPath?: string) {
 
 // -- CLI --
 
+function printHelp() {
+  console.log(`mcpd — MCP service daemon
+
+Usage: mcpd [command] [options]
+
+Commands:
+  start              Start mcpd and all configured services (default)
+  ps, list, ls       List running services with PIDs
+  kill [name|all]    Kill a service or all services
+  restart [name|all] Restart a service or all services
+  stop               Kill everything (mcpd + all services)
+  help               Show this help message
+
+Options:
+  -c, --config <path>  Path to config file (default: mcpd.yml)
+  --help               Show this help message`);
+}
+
 const { values, positionals } = parseArgs({
   args: Bun.argv.slice(2),
   options: {
     config: { type: "string", short: "c" },
+    help: { type: "boolean" },
   },
   allowPositionals: true,
 });
@@ -198,7 +217,15 @@ const { values, positionals } = parseArgs({
 const [command, target] = positionals;
 const configPath = values.config;
 
+if (values.help) {
+  printHelp();
+  process.exit(0);
+}
+
 switch (command) {
+  case "help":
+    printHelp();
+    break;
   case "ps":
   case "list":
   case "ls":
