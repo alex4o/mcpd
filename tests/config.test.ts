@@ -1,5 +1,5 @@
 import { describe, expect, test, beforeEach, afterEach } from "bun:test";
-import { loadConfig, parseDuration } from "../config.ts";
+import { loadConfig, parseDuration, substituteVariables } from "../config.ts";
 import { writeFileSync, unlinkSync, mkdirSync } from "fs";
 import { join } from "path";
 
@@ -167,5 +167,101 @@ services:
       check: tcp
 `);
     expect(() => loadConfig(TMP_CONFIG)).toThrow("Invalid readiness check");
+  });
+
+  test("substitutes ${workspaceRoot} in args and env", () => {
+    writeYaml(`
+services:
+  myservice:
+    command: node
+    args:
+      - --dir
+      - \${workspaceRoot}/src
+    env:
+      DB_PATH: \${workspaceRoot}/data/db.sqlite
+`);
+    const config = loadConfig(TMP_CONFIG);
+    const svc = config.services.myservice!;
+    expect(svc.args[1]).not.toContain("${workspaceRoot}");
+    expect(svc.args[1]).toMatch(/\/src$/);
+    expect(svc.env!.DB_PATH).not.toContain("${workspaceRoot}");
+    expect(svc.env!.DB_PATH).toMatch(/\/data\/db.sqlite$/);
+  });
+
+  test("substitutes ${home}", () => {
+    writeYaml(`
+services:
+  myservice:
+    command: \${home}/bin/server
+`);
+    const config = loadConfig(TMP_CONFIG);
+    const svc = config.services.myservice!;
+    expect(svc.command).not.toContain("${home}");
+    expect(svc.command).toMatch(/\/bin\/server$/);
+  });
+
+  test("substitutes ${env.X} from process.env", () => {
+    process.env.__MCPD_TEST_VAR = "test_value_42";
+    writeYaml(`
+services:
+  myservice:
+    command: node
+    args:
+      - \${env.__MCPD_TEST_VAR}
+`);
+    const config = loadConfig(TMP_CONFIG);
+    expect(config.services.myservice!.args[0]).toBe("test_value_42");
+    delete process.env.__MCPD_TEST_VAR;
+  });
+});
+
+describe("substituteVariables", () => {
+  const vars = { workspaceRoot: "/proj", home: "/home/user" };
+
+  test("replaces variables in strings", () => {
+    expect(substituteVariables("${workspaceRoot}/src", vars)).toBe("/proj/src");
+  });
+
+  test("replaces multiple variables in one string", () => {
+    expect(substituteVariables("${home}/.config/${workspaceRoot}", vars)).toBe(
+      "/home/user/.config//proj",
+    );
+  });
+
+  test("leaves unknown variables as-is", () => {
+    expect(substituteVariables("${unknown}/path", vars)).toBe("${unknown}/path");
+  });
+
+  test("handles ${env.X} lookup", () => {
+    process.env.__MCPD_SUB_TEST = "hello";
+    expect(substituteVariables("${env.__MCPD_SUB_TEST}", vars)).toBe("hello");
+    delete process.env.__MCPD_SUB_TEST;
+  });
+
+  test("leaves unset ${env.X} as-is", () => {
+    delete process.env.__MCPD_NONEXISTENT;
+    expect(substituteVariables("${env.__MCPD_NONEXISTENT}", vars)).toBe(
+      "${env.__MCPD_NONEXISTENT}",
+    );
+  });
+
+  test("recurses into arrays", () => {
+    expect(substituteVariables(["${home}/a", "${workspaceRoot}/b"], vars)).toEqual([
+      "/home/user/a",
+      "/proj/b",
+    ]);
+  });
+
+  test("recurses into nested objects", () => {
+    const input = { outer: { inner: "${workspaceRoot}/deep" } };
+    expect(substituteVariables(input, vars)).toEqual({
+      outer: { inner: "/proj/deep" },
+    });
+  });
+
+  test("passes through non-string primitives unchanged", () => {
+    expect(substituteVariables(42, vars)).toBe(42);
+    expect(substituteVariables(true, vars)).toBe(true);
+    expect(substituteVariables(null, vars)).toBe(null);
   });
 });

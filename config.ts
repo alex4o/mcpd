@@ -132,6 +132,36 @@ function findConfigFile(explicit?: string): string | null {
   return null;
 }
 
+/**
+ * Recursively substitutes `${key}` patterns in all string values.
+ * Supports `${env.VAR}` for environment variables.
+ * Unknown variables are left as-is.
+ */
+export function substituteVariables(
+  obj: unknown,
+  vars: Record<string, string>,
+): unknown {
+  if (typeof obj === "string") {
+    return obj.replace(/\$\{([^}]+)\}/g, (match, key: string) => {
+      if (key.startsWith("env.")) {
+        return process.env[key.slice(4)] ?? match;
+      }
+      return vars[key] ?? match;
+    });
+  }
+  if (Array.isArray(obj)) {
+    return obj.map((item) => substituteVariables(item, vars));
+  }
+  if (obj !== null && typeof obj === "object") {
+    const result: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
+      result[k] = substituteVariables(v, vars);
+    }
+    return result;
+  }
+  return obj;
+}
+
 export function loadConfig(path?: string): McpdConfig {
   const file = findConfigFile(path);
   if (!file) throw new Error("No mcpd.yml found");
@@ -143,8 +173,14 @@ export function loadConfig(path?: string): McpdConfig {
     throw new Error("Config must have a 'services' map");
   }
 
+  const vars: Record<string, string> = {
+    workspaceRoot: findProjectRoot(),
+    home: homedir(),
+  };
+  const substituted = substituteVariables(raw, vars) as Record<string, any>;
+
   const services: Record<string, ServiceConfig> = {};
-  for (const [name, svc] of Object.entries(raw.services as Record<string, any>)) {
+  for (const [name, svc] of Object.entries(substituted.services as Record<string, any>)) {
     services[name] = applyServiceDefaults(svc);
   }
 
