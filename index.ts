@@ -35,9 +35,12 @@ async function cmdStart(configPath?: string) {
   const config = loadConfig(configPath);
   const manager = new ServiceManager();
   const aggregator = new ToolAggregator();
-  const allMiddlewares: McpMiddleware[] = [];
+  const serviceMiddlewares = new Map<string, McpMiddleware[]>();
+  const clients: BackendClient[] = [];
 
   const cleanup = async () => {
+    // Disconnect all backend clients (stdio clients kill their child process)
+    await Promise.all(clients.map((c) => c.disconnect().catch(() => {})));
     // Only stop services that don't have keep_alive set
     for (const [name, svc] of Object.entries(config.services)) {
       if (!svc.keep_alive) {
@@ -50,23 +53,40 @@ async function cmdStart(configPath?: string) {
   process.on("SIGTERM", cleanup);
   process.on("SIGINT", cleanup);
 
-  await manager.startAll(config);
+  // Only SSE services need process management; stdio is owned by StdioClientTransport
+  const sseOnlyConfig = {
+    services: Object.fromEntries(
+      Object.entries(config.services).filter(([, svc]) => svc.transport === "sse")
+    ),
+  };
+  await manager.startAll(sseOnlyConfig);
 
   // Write PID file only after successful startup
   writeFileSync(PID_FILE, String(process.pid));
 
   for (const [name, svc] of Object.entries(config.services)) {
+    const client = new BackendClient(name);
+
     if (svc.transport === "sse" && svc.url) {
-      const client = new BackendClient(name);
       await client.connect(svc.url);
-      aggregator.addBackend(name, client);
+    } else if (svc.transport === "stdio") {
+      await client.connectStdio(svc.command, svc.args, {
+        cwd: svc.cwd,
+        env: svc.env,
+      });
+    } else {
+      continue;
     }
+
+    clients.push(client);
+    aggregator.addBackend(name, client);
+
     if (svc.middleware?.response) {
-      allMiddlewares.push(...resolveMiddleware(svc.middleware.response));
+      serviceMiddlewares.set(name, resolveMiddleware(svc.middleware.response));
     }
   }
 
-  await createServer(aggregator, allMiddlewares);
+  await createServer(aggregator, serviceMiddlewares);
 }
 
 function cmdPs() {
@@ -108,7 +128,7 @@ function cmdKill(target?: string) {
     process.exit(1);
   }
 
-  const toKill = killAll ? state : { [target!]: state[target!] };
+  const toKill = killAll ? state : { [target!]: state[target!]! };
 
   for (const [name, info] of Object.entries(toKill)) {
     killServiceByPid(name, info);
@@ -138,17 +158,23 @@ async function cmdRestart(target: string | undefined, configPath?: string) {
     : [target!];
 
   for (const name of toRestart) {
-    if (state[name]) killServiceByPid(name, state[name]);
+    if (state[name]) killServiceByPid(name, state[name]!);
   }
 
   // Brief wait for processes to exit
   await new Promise((r) => setTimeout(r, 1000));
 
   // Start services through ServiceManager (with readiness checks + state persistence)
+  // Stdio services are owned by the transport in the running mcpd instance —
+  // they restart automatically when mcpd reconnects.
   const manager = new ServiceManager();
   for (const name of toRestart) {
     const svc = config.services[name];
     if (!svc?.command) continue;
+    if (svc.transport === "stdio") {
+      console.log(`${name}: stdio service — restart mcpd to reconnect`);
+      continue;
+    }
     console.log(`${name}: starting...`);
     await manager.start(name, svc);
     console.log(`${name}: started (${manager.getState(name)})`);

@@ -10,7 +10,7 @@ import { applyMiddleware } from "./middleware.ts";
 
 export async function createServer(
   aggregator: ToolAggregator,
-  middlewares: McpMiddleware[]
+  serviceMiddlewares: Map<string, McpMiddleware[]>
 ): Promise<void> {
   const server = new Server(
     { name: "mcpd", version: "1.0.0" },
@@ -27,7 +27,9 @@ export async function createServer(
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
+    const { service } = aggregator.parseName(name);
     const result = await aggregator.routeToolCall(name, args ?? {});
+    const middlewares = serviceMiddlewares.get(service) ?? [];
     return applyMiddleware(middlewares, name, result);
   });
 
