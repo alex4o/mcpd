@@ -156,3 +156,5 @@ Test fixtures use random/dynamic ports. Tests run in ~1s.
 - Pragmatic, direct problem-solving approach
 - No wrapper scripts — mcpd owns processes directly
 - Reuse running backends instead of spawning duplicates
+
+Bun docs: https://bun.com/docs/llms.txt

@@ -44,14 +44,52 @@ async function isReachable(url: string, timeoutMs = 5000): Promise<boolean> {
   }
 }
 
-/** Try to find the PID of the process listening on the given URL's port. */
-function findPidByPort(url: string): number | null {
+/** Resolve the effective port from a URL (handles implicit 80/443). */
+function resolvePort(url: string): string | null {
+  const parsed = new URL(url);
+  if (parsed.port) return parsed.port;
+  if (parsed.protocol === "https:") return "443";
+  if (parsed.protocol === "http:") return "80";
+  return null;
+}
+
+/** Get a process command line, preferring /proc and falling back to ps. */
+function getCommandLine(pid: number): string | null {
   try {
-    const port = new URL(url).port;
+    return readFileSync(`/proc/${pid}/cmdline`, "utf-8").replace(/\0/g, " ").trim();
+  } catch {
+    try {
+      return execSync(`ps -p ${pid} -o command=`, { encoding: "utf-8" }).trim();
+    } catch {
+      return null;
+    }
+  }
+}
+
+/**
+ * Try to find the PID of the process listening on the given URL's port.
+ * When commandHints are provided, only returns a PID whose command line
+ * contains at least one hint — prevents misattributing unrelated processes.
+ * Passing both command and args as hints handles wrapper launchers (e.g. uv)
+ * where the listener process differs from the configured command.
+ */
+function findPidByPort(url: string, commandHints?: string[]): number | null {
+  try {
+    const port = resolvePort(url);
     if (!port) return null;
-    const out = execSync(`lsof -ti :${port}`, { encoding: "utf-8" }).trim();
-    const pid = parseInt(out.split("\n")[0]!, 10);
-    return Number.isFinite(pid) ? pid : null;
+    const out = execSync(`lsof -ti :${port} -sTCP:LISTEN`, { encoding: "utf-8" }).trim();
+    const pids = out.split("\n").map(s => parseInt(s, 10)).filter(Number.isFinite);
+    if (pids.length === 0) return null;
+
+    if (!commandHints?.length) return pids[0]!;
+
+    for (const pid of pids) {
+      const cmdline = getCommandLine(pid);
+      if (cmdline && commandHints.some(hint => cmdline.includes(hint))) return pid;
+    }
+
+    // Command verification requested but not proven; fail closed.
+    return null; // No PID matched any hint
   } catch {
     return null;
   }
@@ -80,8 +118,8 @@ export class ServiceManager {
 
       // No saved pid, but service might still be reachable (started externally)
       if (await isReachable(checkUrl)) {
-        // Try to recover the PID by scanning for the command
-        const pid = findPidByPort(config.url);
+        // Try to recover the PID via port lookup with command validation
+        const pid = findPidByPort(checkUrl, [config.command, ...config.args]);
         if (pid) this.pids.set(name, pid);
         this.states.set(name, "ready");
         this.saveState();

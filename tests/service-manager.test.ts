@@ -278,8 +278,12 @@ describe("Service reuse — no duplicate instances", () => {
 
       const info = mgr.getAll().find((s) => s.name === SVC);
       expect(info?.state).toBe("ready");
-      // PID recovered via port lookup even though manager didn't spawn this process
-      expect(info?.pid).toBeNumber();
+      // Verify a PID was recovered and it belongs to the correct service process
+      expect(info?.pid).toBeDefined();
+      expect(pidAlive(info!.pid!)).toBe(true);
+      // Cross-platform: use ps instead of /proc to check the process command line
+      const ps = Bun.spawnSync(["ps", "-p", String(info!.pid), "-o", "args="]);
+      expect(ps.stdout.toString()).toContain("test-server");
     } finally {
       externalProc.kill("SIGTERM");
       await externalProc.exited;
