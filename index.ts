@@ -1,5 +1,5 @@
 import { parseArgs } from "util";
-import { loadConfig } from "./config.ts";
+import { loadConfig, findProjectRoot } from "./config.ts";
 import { ServiceManager, pidAlive } from "./service-manager.ts";
 import { BackendClient } from "./sse-client.ts";
 import { ToolAggregator } from "./aggregator.ts";
@@ -8,7 +8,7 @@ import { resolveMiddleware, type McpMiddleware } from "./middleware.ts";
 import { writeFileSync, readFileSync, existsSync, unlinkSync } from "fs";
 import { join } from "path";
 
-const PID_FILE = join(process.cwd(), ".mcpd.pid");
+const PID_FILE = join(findProjectRoot(), ".mcpd.pid");
 
 // -- commands --
 

@@ -1,6 +1,16 @@
 import { existsSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
+import { execSync } from "child_process";
+
+/** Find the git repository root, falling back to cwd. */
+export function findProjectRoot(): string {
+  try {
+    return execSync("git rev-parse --show-toplevel", { encoding: "utf-8" }).trim();
+  } catch {
+    return process.cwd();
+  }
+}
 
 export interface ReadinessConfig {
   check: "http";

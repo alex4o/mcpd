@@ -1,11 +1,12 @@
 import { describe, expect, test, afterEach } from "bun:test";
 import { ServiceManager, pidAlive } from "../service-manager.ts";
 import type { ServiceConfig } from "../config.ts";
+import { findProjectRoot } from "../config.ts";
 import { join } from "path";
 import { unlinkSync } from "fs";
 
 const TEST_SERVER = join(import.meta.dir, "fixtures", "test-server.ts");
-const STATE_FILE = join(process.cwd(), ".mcpd-state.json");
+const STATE_FILE = join(findProjectRoot(), ".mcpd-state.json");
 
 function makeConfig(overrides: Partial<ServiceConfig> = {}): ServiceConfig {
   return {

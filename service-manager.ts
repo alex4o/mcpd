@@ -1,11 +1,12 @@
 import type { Subprocess } from "bun";
 import type { ServiceConfig, McpdConfig } from "./config.ts";
+import { findProjectRoot } from "./config.ts";
 import { writeFileSync, readFileSync, existsSync, unlinkSync } from "fs";
 import { join } from "path";
 
 export type ServiceState = "stopped" | "starting" | "ready" | "error";
 
-const STATE_FILE = join(process.cwd(), ".mcpd-state.json");
+const STATE_FILE = join(findProjectRoot(), ".mcpd-state.json");
 
 export interface ServiceInfo {
   name: string;
