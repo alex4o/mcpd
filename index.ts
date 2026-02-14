@@ -10,6 +10,25 @@ import { join } from "path";
 
 const PID_FILE = join(findProjectRoot(), ".mcpd.pid");
 
+// -- helpers --
+
+function killServiceByPid(name: string, info: { pid?: number }): void {
+  if (!info?.pid) {
+    console.log(`${name}: no pid tracked`);
+    return;
+  }
+  if (!pidAlive(info.pid)) {
+    console.log(`${name}: pid ${info.pid} already dead`);
+    return;
+  }
+  try {
+    process.kill(info.pid, "SIGTERM");
+    console.log(`${name}: killed ${info.pid}`);
+  } catch (e: any) {
+    console.log(`${name}: ${e.code === "ESRCH" ? "already gone" : e.message}`);
+  }
+}
+
 // -- commands --
 
 async function cmdStart(configPath?: string) {
@@ -92,20 +111,7 @@ function cmdKill(target?: string) {
   const toKill = killAll ? state : { [target!]: state[target!] };
 
   for (const [name, info] of Object.entries(toKill)) {
-    if (!info?.pid) {
-      console.log(`${name}: no pid tracked`);
-      continue;
-    }
-    if (!pidAlive(info.pid)) {
-      console.log(`${name}: pid ${info.pid} already dead`);
-      continue;
-    }
-    try {
-      process.kill(info.pid, "SIGTERM");
-      console.log(`${name}: killed ${info.pid}`);
-    } catch (e: any) {
-      console.log(`${name}: ${e.code === "ESRCH" ? "already gone" : e.message}`);
-    }
+    killServiceByPid(name, info);
   }
 
   // Kill mcpd itself when killing all
@@ -132,13 +138,7 @@ async function cmdRestart(target: string | undefined, configPath?: string) {
     : [target!];
 
   for (const name of toRestart) {
-    const info = state[name];
-    if (info?.pid && pidAlive(info.pid)) {
-      try {
-        process.kill(info.pid, "SIGTERM");
-        console.log(`${name}: killed pid ${info.pid}`);
-      } catch {}
-    }
+    if (state[name]) killServiceByPid(name, state[name]);
   }
 
   // Brief wait for processes to exit
