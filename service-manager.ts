@@ -1,18 +1,76 @@
 import type { Subprocess } from "bun";
 import type { ServiceConfig, McpdConfig } from "./config.ts";
+import { writeFileSync, readFileSync, existsSync, unlinkSync } from "fs";
+import { join } from "path";
 
 export type ServiceState = "stopped" | "starting" | "ready" | "error";
+
+const STATE_FILE = join(process.cwd(), ".mcpd-state.json");
+
+export interface ServiceInfo {
+  name: string;
+  state: ServiceState;
+  pid?: number;
+  url?: string;
+}
 
 interface ManagedService {
   proc: Subprocess;
   config: ServiceConfig;
 }
 
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function isReachable(url: string): Promise<boolean> {
+  try {
+    const controller = new AbortController();
+    const resp = await fetch(url, { signal: controller.signal });
+    controller.abort();
+    return resp.ok;
+  } catch {
+    return false;
+  }
+}
+
 export class ServiceManager {
   private services = new Map<string, ManagedService>();
   private states = new Map<string, ServiceState>();
+  private pids = new Map<string, number>();
+  private urls = new Map<string, string>();
 
   async start(name: string, config: ServiceConfig): Promise<void> {
+    if (config.url) this.urls.set(name, config.url);
+
+    // Check if already running — reuse existing instance
+    if (config.transport === "sse" && config.url) {
+      const checkUrl = config.readiness?.url ?? config.url;
+
+      // Check state file for existing pid
+      const saved = ServiceManager.loadState()[name];
+      if (saved?.pid && pidAlive(saved.pid)) {
+        if (await isReachable(checkUrl)) {
+          this.pids.set(name, saved.pid);
+          this.states.set(name, "ready");
+          this.saveState();
+          return;
+        }
+      }
+
+      // No saved pid, but service might still be reachable (started externally)
+      if (await isReachable(checkUrl)) {
+        this.states.set(name, "ready");
+        this.saveState();
+        return;
+      }
+    }
+
     if (this.services.has(name)) {
       throw new Error(`Service '${name}' is already running`);
     }
@@ -27,11 +85,17 @@ export class ServiceManager {
       onExit: (_proc, exitCode) => {
         this.services.delete(name);
         const currentState = this.states.get(name);
-        // Don't overwrite "ready" state — the launcher script may exit
-        // while the actual backend keeps running (e.g., backgrounded process)
-        if (currentState === "ready") return;
+        if (currentState === "ready") {
+          this.states.set(name, "error");
+          this.saveState();
+          if (config.restart === "on-failure" || config.restart === "always") {
+            this.start(name, config).catch(() => {});
+          }
+          return;
+        }
         if (exitCode !== 0 && exitCode !== null) {
           this.states.set(name, "error");
+          this.saveState();
           if (config.restart === "on-failure" || config.restart === "always") {
             this.start(name, config).catch(() => {});
           }
@@ -39,33 +103,33 @@ export class ServiceManager {
           if (config.restart === "always") {
             this.start(name, config).catch(() => {});
           } else if (currentState !== "starting") {
-            // Only set stopped if we're not still in the readiness check phase
             this.states.set(name, "stopped");
+            this.saveState();
           }
         }
       },
     });
 
     this.services.set(name, { proc, config });
+    this.pids.set(name, proc.pid);
 
     if (config.transport === "sse" && config.readiness.check === "http") {
       await this.waitForReady(name, config);
     }
 
     this.states.set(name, "ready");
+    this.saveState();
   }
 
   async stop(name: string): Promise<void> {
     const svc = this.services.get(name);
     if (!svc) return;
 
-    // Temporarily set restart to never so onExit doesn't restart
     const origRestart = svc.config.restart;
     svc.config.restart = "never";
 
     svc.proc.kill("SIGTERM");
 
-    // Wait up to 5s for graceful exit
     const exited = await Promise.race([
       svc.proc.exited.then(() => true),
       new Promise<false>((r) => setTimeout(() => r(false), 5000)),
@@ -79,6 +143,7 @@ export class ServiceManager {
     svc.config.restart = origRestart;
     this.services.delete(name);
     this.states.set(name, "stopped");
+    this.saveState();
   }
 
   async restart(name: string): Promise<void> {
@@ -90,50 +155,77 @@ export class ServiceManager {
   }
 
   async startAll(config: McpdConfig): Promise<void> {
-    const entries = Object.entries(config.services);
     await Promise.all(
-      entries.map(([name, svc]) => this.start(name, svc))
+      Object.entries(config.services).map(([name, svc]) => this.start(name, svc))
     );
   }
 
   async stopAll(): Promise<void> {
-    const names = [...this.services.keys()];
-    await Promise.all(names.map((name) => this.stop(name)));
+    await Promise.all(
+      [...this.services.keys()].map((name) => this.stop(name))
+    );
+    this.cleanupState();
   }
 
   getState(name: string): ServiceState {
     return this.states.get(name) ?? "stopped";
   }
 
-  getAll(): Array<{ name: string; state: ServiceState; pid?: number }> {
+  getAll(): ServiceInfo[] {
     const all = new Set([...this.services.keys(), ...this.states.keys()]);
     return [...all].map((name) => ({
       name,
       state: this.getState(name),
-      pid: this.services.get(name)?.proc.pid,
+      pid: this.pids.get(name),
+      url: this.urls.get(name),
     }));
   }
 
-  private async waitForReady(
-    name: string,
-    config: ServiceConfig
-  ): Promise<void> {
+  // -- state persistence --
+
+  private saveState(): void {
+    const state: Record<string, Omit<ServiceInfo, "name">> = {};
+    const all = new Set([...this.services.keys(), ...this.states.keys()]);
+    for (const name of all) {
+      state[name] = {
+        state: this.getState(name),
+        pid: this.pids.get(name),
+        url: this.urls.get(name),
+      };
+    }
+    try {
+      writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
+    } catch {}
+  }
+
+  private cleanupState(): void {
+    try { unlinkSync(STATE_FILE); } catch {}
+  }
+
+  static loadState(): Record<string, ServiceInfo> {
+    if (!existsSync(STATE_FILE)) return {};
+    try {
+      const raw = JSON.parse(readFileSync(STATE_FILE, "utf-8"));
+      const result: Record<string, ServiceInfo> = {};
+      for (const [name, info] of Object.entries(raw as Record<string, any>)) {
+        result[name] = { name, ...info };
+      }
+      return result;
+    } catch {
+      return {};
+    }
+  }
+
+  // -- readiness --
+
+  private async waitForReady(name: string, config: ServiceConfig): Promise<void> {
     const url = config.readiness.url ?? config.url;
     if (!url) throw new Error(`Service '${name}': no URL for readiness check`);
 
     const deadline = Date.now() + config.readiness.timeout;
 
     while (Date.now() < deadline) {
-      try {
-        const controller = new AbortController();
-        const resp = await fetch(url, { signal: controller.signal });
-        // Abort immediately — we only need the status code, not the body
-        // (SSE endpoints would keep the connection open forever)
-        controller.abort();
-        if (resp.ok) return;
-      } catch {
-        // not ready yet
-      }
+      if (await isReachable(url)) return;
       await new Promise((r) => setTimeout(r, config.readiness.interval));
     }
 

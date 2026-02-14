@@ -1,7 +1,20 @@
 services:
   serena:
-    command: ./start-serena-backend.sh
-    args: []
+    command: uv
+    args:
+      - run
+      - --directory
+      - /home/alex4o/Projects/serena
+      - serena
+      - start-mcp-server
+      - --context
+      - claude-code
+      - --project
+      - /home/alex4o/Projects/mcp-serviced
+      - --transport
+      - sse
+      - --port
+      - "8766"
     transport: sse
     url: http://localhost:8766/sse
     readiness:
@@ -11,3 +24,14 @@ services:
       interval: 500ms
     restart: on-failure
     keep_alive: true
+
+  cgc:
+    command: uvx
+    args:
+      - --from
+      - codegraphcontext
+      - cgc
+      - mcp
+      - start
+    transport: stdio
+    restart: on-failure
