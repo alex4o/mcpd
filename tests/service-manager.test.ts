@@ -278,8 +278,8 @@ describe("Service reuse — no duplicate instances", () => {
 
       const info = mgr.getAll().find((s) => s.name === SVC);
       expect(info?.state).toBe("ready");
-      // No PID tracked — manager didn't spawn this process
-      expect(info?.pid).toBeUndefined();
+      // PID recovered via port lookup even though manager didn't spawn this process
+      expect(info?.pid).toBeNumber();
     } finally {
       externalProc.kill("SIGTERM");
       await externalProc.exited;

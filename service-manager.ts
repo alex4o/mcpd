@@ -2,6 +2,7 @@ import type { Subprocess } from "bun";
 import type { ServiceConfig, McpdConfig } from "./config.ts";
 import { findProjectRoot } from "./config.ts";
 import { writeFileSync, readFileSync, existsSync, unlinkSync } from "fs";
+import { execSync } from "child_process";
 import { join } from "path";
 
 export type ServiceState = "stopped" | "starting" | "ready" | "error";
@@ -43,6 +44,19 @@ async function isReachable(url: string, timeoutMs = 5000): Promise<boolean> {
   }
 }
 
+/** Try to find the PID of the process listening on the given URL's port. */
+function findPidByPort(url: string): number | null {
+  try {
+    const port = new URL(url).port;
+    if (!port) return null;
+    const out = execSync(`lsof -ti :${port}`, { encoding: "utf-8" }).trim();
+    const pid = parseInt(out.split("\n")[0]!, 10);
+    return Number.isFinite(pid) ? pid : null;
+  } catch {
+    return null;
+  }
+}
+
 export class ServiceManager {
   private services = new Map<string, ManagedService>();
   private states = new Map<string, ServiceState>();
@@ -55,20 +69,20 @@ export class ServiceManager {
     // Check if already running — reuse existing instance
     if (config.transport === "sse" && config.url) {
       const checkUrl = config.readiness?.url ?? config.url;
-
-      // Check state file for existing pid
       const saved = ServiceManager.loadState()[name];
-      if (saved?.pid && pidAlive(saved.pid)) {
-        if (await isReachable(checkUrl)) {
-          this.pids.set(name, saved.pid);
-          this.states.set(name, "ready");
-          this.saveState();
-          return;
-        }
+
+      if (saved?.pid && pidAlive(saved.pid) && await isReachable(checkUrl)) {
+        this.pids.set(name, saved.pid);
+        this.states.set(name, "ready");
+        this.saveState();
+        return;
       }
 
       // No saved pid, but service might still be reachable (started externally)
       if (await isReachable(checkUrl)) {
+        // Try to recover the PID by scanning for the command
+        const pid = findPidByPort(config.url);
+        if (pid) this.pids.set(name, pid);
         this.states.set(name, "ready");
         this.saveState();
         return;
