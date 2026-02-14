@@ -19,7 +19,7 @@ interface ManagedService {
   config: ServiceConfig;
 }
 
-function pidAlive(pid: number): boolean {
+export function pidAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
@@ -28,13 +28,16 @@ function pidAlive(pid: number): boolean {
   }
 }
 
-async function isReachable(url: string): Promise<boolean> {
+async function isReachable(url: string, timeoutMs = 5000): Promise<boolean> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const controller = new AbortController();
     const resp = await fetch(url, { signal: controller.signal });
-    controller.abort();
+    controller.abort(); // Stop reading body (SSE streams stay open)
+    clearTimeout(timer);
     return resp.ok;
   } catch {
+    clearTimeout(timer);
     return false;
   }
 }
@@ -84,6 +87,7 @@ export class ServiceManager {
       stderr: "ignore",
       onExit: (_proc, exitCode) => {
         this.services.delete(name);
+        this.pids.delete(name);
         const currentState = this.states.get(name);
         if (currentState === "ready") {
           this.states.set(name, "error");
@@ -142,6 +146,7 @@ export class ServiceManager {
 
     svc.config.restart = origRestart;
     this.services.delete(name);
+    this.pids.delete(name);
     this.states.set(name, "stopped");
     this.saveState();
   }
