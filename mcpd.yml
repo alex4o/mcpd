@@ -35,3 +35,23 @@ services:
       - start
     transport: stdio
     restart: on-failure
+    env:
+      DEFAULT_DATABASE: falkordb
+      FALKORDB_PATH: /home/alex4o/Projects/mcp-serviced/.cgc/falkordb.db
+      FALKORDB_SOCKET_PATH: /home/alex4o/Projects/mcp-serviced/.cgc/falkordb.sock
+      INDEX_VARIABLES: "true"
+      ALLOW_DB_DELETION: "false"
+      DEBUG_LOGS: "false"
+      DEBUG_LOG_PATH: /home/alex4o/Projects/mcp-serviced/.cgc/debug.log
+      ENABLE_APP_LOGS: CRITICAL
+      LOG_FILE_PATH: /home/alex4o/Projects/mcp-serviced/.cgc/cgc.log
+      MAX_FILE_SIZE_MB: "10"
+      IGNORE_TEST_FILES: "false"
+      IGNORE_HIDDEN_FILES: "true"
+      ENABLE_AUTO_WATCH: "true"
+      COMPLEXITY_THRESHOLD: "10"
+      MAX_DEPTH: unlimited
+      PARALLEL_WORKERS: "4"
+      CACHE_ENABLED: "true"
+      IGNORE_DIRS: node_modules,venv,.venv,env,.env,dist,build,target,out,.git,.idea,.vscode,__pycache__
+      INDEX_SOURCE: "true"
