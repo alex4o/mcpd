@@ -171,16 +171,16 @@ describe("ToolAggregator — underscore service names", () => {
     expect(tool).toBe("run_query");
   });
 
-  test("prefers shortest matching prefix", () => {
+  test("prefers longest matching prefix", () => {
     const agg = new ToolAggregator();
-    // "a" and "a_b" are both backends; "a_b_tool" should match "a" first
-    // since we iterate left-to-right
+    // "a" and "a_b" are both backends; "a_b_tool" should match "a_b"
+    // since longest prefix wins for unambiguous routing
     agg.addBackend("a", mockClient([toolA]));
     agg.addBackend("a_b", mockClient([toolC]));
 
     const { service, tool } = agg.parseName("a_b_tool");
-    expect(service).toBe("a");
-    expect(tool).toBe("b_tool");
+    expect(service).toBe("a_b");
+    expect(tool).toBe("tool");
   });
 
   test("falls through to longer prefix when short prefix has no match", () => {
@@ -203,5 +203,58 @@ describe("ToolAggregator — underscore service names", () => {
     const names = tools.map((t) => t.name);
     expect(names).toContain("my_db_run_query");
     expect(names).toContain("serena_find_symbol");
+  });
+});
+
+describe("ToolAggregator — exclude_tools", () => {
+  test("excludes tools by name", async () => {
+    const agg = new ToolAggregator();
+    agg.addBackend("serena", mockClient([toolA, toolB]), ["search"]);
+
+    const tools = await agg.listAllTools();
+    expect(tools).toHaveLength(1);
+    expect(tools[0]!.name).toBe("find_symbol");
+  });
+
+  test("excludes tools with multiple backends", async () => {
+    const agg = new ToolAggregator();
+    agg.addBackend("serena", mockClient([toolA, toolB]), ["find_symbol"]);
+    agg.addBackend("db", mockClient([toolC]));
+
+    const tools = await agg.listAllTools();
+    const names = tools.map((t) => t.name);
+    expect(names).toEqual(["serena_search", "db_run_query"]);
+  });
+
+  test("exclusion only affects the specified backend", async () => {
+    const agg = new ToolAggregator();
+    agg.addBackend("a", mockClient([toolA, toolB]), ["search"]);
+    agg.addBackend("b", mockClient([toolA, toolB]));
+
+    const tools = await agg.listAllTools();
+    const names = tools.map((t) => t.name);
+    expect(names).toContain("b_search");
+    expect(names).not.toContain("a_search");
+  });
+
+  test("removeBackend clears exclusion state", async () => {
+    const agg = new ToolAggregator();
+    agg.addBackend("serena", mockClient([toolA, toolB]), ["search"]);
+    agg.removeBackend("serena");
+    // Re-add without exclusions — stale exclusions should not apply
+    agg.addBackend("serena", mockClient([toolA, toolB]));
+
+    const tools = await agg.listAllTools();
+    expect(tools).toHaveLength(2);
+  });
+
+  test("addBackend without exclusions clears previous exclusions", async () => {
+    const agg = new ToolAggregator();
+    agg.addBackend("serena", mockClient([toolA, toolB]), ["search"]);
+    // Replace backend without exclusions
+    agg.addBackend("serena", mockClient([toolA, toolB]));
+
+    const tools = await agg.listAllTools();
+    expect(tools).toHaveLength(2);
   });
 });

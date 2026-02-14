@@ -29,6 +29,7 @@ export interface ServiceConfig {
   readiness: ReadinessConfig;
   restart: "on-failure" | "always" | "never";
   keep_alive: boolean;
+  exclude_tools?: string[];
   middleware?: {
     response?: (string | Record<string, any>)[];
   };
@@ -66,6 +67,14 @@ const SERVICE_DEFAULTS = {
     interval: 500,
   },
 };
+
+function validateStringArray(value: unknown, field: string): string[] | undefined {
+  if (value == null) return undefined;
+  if (!Array.isArray(value) || !value.every((v) => typeof v === "string")) {
+    throw new Error(`'${field}' must be an array of strings`);
+  }
+  return value;
+}
 
 const VALID_TRANSPORTS = ["sse", "stdio"] as const;
 const VALID_RESTART = ["on-failure", "always", "never"] as const;
@@ -113,6 +122,7 @@ function applyServiceDefaults(raw: any): ServiceConfig {
     readiness,
     restart,
     keep_alive: raw.keep_alive ?? SERVICE_DEFAULTS.keep_alive,
+    exclude_tools: validateStringArray(raw.exclude_tools, "exclude_tools"),
     middleware: raw.middleware,
   };
 }

@@ -169,6 +169,51 @@ services:
     expect(() => loadConfig(TMP_CONFIG)).toThrow("Invalid readiness check");
   });
 
+  test("parses exclude_tools as string array", () => {
+    writeYaml(`
+services:
+  myservice:
+    command: node server.js
+    exclude_tools:
+      - find_code
+      - search
+`);
+    const config = loadConfig(TMP_CONFIG);
+    expect(config.services.myservice!.exclude_tools).toEqual(["find_code", "search"]);
+  });
+
+  test("returns undefined when exclude_tools is omitted", () => {
+    writeYaml(`
+services:
+  myservice:
+    command: node server.js
+`);
+    const config = loadConfig(TMP_CONFIG);
+    expect(config.services.myservice!.exclude_tools).toBeUndefined();
+  });
+
+  test("rejects non-array exclude_tools", () => {
+    writeYaml(`
+services:
+  myservice:
+    command: node server.js
+    exclude_tools: find_code
+`);
+    expect(() => loadConfig(TMP_CONFIG)).toThrow("must be an array of strings");
+  });
+
+  test("rejects exclude_tools with non-string elements", () => {
+    writeYaml(`
+services:
+  myservice:
+    command: node server.js
+    exclude_tools:
+      - 123
+      - true
+`);
+    expect(() => loadConfig(TMP_CONFIG)).toThrow("must be an array of strings");
+  });
+
   test("substitutes ${workspaceRoot} in args and env", () => {
     writeYaml(`
 services:

@@ -8,13 +8,20 @@ export interface NamespacedTool extends Tool {
 
 export class ToolAggregator {
   private backends = new Map<string, BackendClient>();
+  private excludedTools = new Map<string, Set<string>>();
 
-  addBackend(name: string, client: BackendClient): void {
+  addBackend(name: string, client: BackendClient, excludeTools?: string[]): void {
     this.backends.set(name, client);
+    if (excludeTools?.length) {
+      this.excludedTools.set(name, new Set(excludeTools));
+    } else {
+      this.excludedTools.delete(name);
+    }
   }
 
   removeBackend(name: string): void {
     this.backends.delete(name);
+    this.excludedTools.delete(name);
   }
 
   private get needsPrefix(): boolean {
@@ -34,7 +41,9 @@ export class ToolAggregator {
     );
 
     for (const { name, tools } of toolLists) {
+      const excluded = this.excludedTools.get(name);
       for (const tool of tools) {
+        if (excluded?.has(tool.name)) continue;
         results.push({
           ...tool,
           name: prefix ? `${name}_${tool.name}` : tool.name,
@@ -56,16 +65,20 @@ export class ToolAggregator {
       return { service: serviceName, tool: toolName };
     }
     // Try each underscore position to find a matching service prefix.
-    // This handles service names containing underscores (e.g., "my_db_run_query" → "my_db" + "run_query").
+    // Prefer the longest match so "a_b" wins over "a" for "a_b_tool".
+    let bestIdx = -1;
     let idx = 0;
     while (true) {
       idx = toolName.indexOf("_", idx);
       if (idx === -1) break;
       const prefix = toolName.slice(0, idx);
       if (this.backends.has(prefix)) {
-        return { service: prefix, tool: toolName.slice(idx + 1) };
+        bestIdx = idx;
       }
       idx++;
+    }
+    if (bestIdx !== -1) {
+      return { service: toolName.slice(0, bestIdx), tool: toolName.slice(bestIdx + 1) };
     }
     throw new Error(`Invalid tool name: ${toolName} (no matching service prefix)`);
   }

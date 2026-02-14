@@ -83,7 +83,7 @@ async function cmdStart(configPath?: string) {
     }
 
     clients.push(client);
-    aggregator.addBackend(name, client);
+    aggregator.addBackend(name, client, svc.exclude_tools);
 
     if (svc.middleware?.response) {
       serviceMiddlewares.set(name, resolveMiddleware(svc.middleware.response));
