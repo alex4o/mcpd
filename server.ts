@@ -28,8 +28,7 @@ export async function createServer(
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
     const result = await aggregator.routeToolCall(name, args ?? {});
-    const processed = applyMiddleware(middlewares, name, result as any);
-    return processed as any;
+    return applyMiddleware(middlewares, name, result);
   });
 
   const transport = new StdioServerTransport();

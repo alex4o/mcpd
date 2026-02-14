@@ -1,6 +1,6 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
-import type { Tool } from "@modelcontextprotocol/sdk/types.js";
+import type { Tool, CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 
 export class BackendClient {
   private client: Client;
@@ -23,13 +23,10 @@ export class BackendClient {
   async callTool(
     name: string,
     args: Record<string, unknown>
-  ): Promise<{ content: any[]; isError?: boolean }> {
+  ): Promise<CallToolResult> {
     const result = await this.client.callTool({ name, arguments: args });
     if ("content" in result) {
-      return {
-        content: result.content as any[],
-        isError: result.isError as boolean | undefined,
-      };
+      return result as CallToolResult;
     }
     // Legacy toolResult format — wrap in text content
     return {
