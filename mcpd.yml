@@ -1,0 +1,13 @@
+services:
+  serena:
+    command: ./start-serena-backend.sh
+    args: []
+    transport: sse
+    url: http://localhost:8766/sse
+    readiness:
+      check: http
+      url: http://localhost:8766/sse
+      timeout: 60s
+      interval: 500ms
+    restart: on-failure
+    keep_alive: true
