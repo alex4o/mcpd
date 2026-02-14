@@ -1,4 +1,4 @@
-import { describe, expect, test, afterEach } from "bun:test";
+import { describe, expect, test, afterEach, beforeEach } from "bun:test";
 import { ServiceManager, pidAlive } from "../service-manager.ts";
 import type { ServiceConfig } from "../config.ts";
 import { findProjectRoot } from "../config.ts";
@@ -168,14 +168,28 @@ describe("ServiceManager", () => {
 
 describe("Service reuse — no duplicate instances", () => {
   const managers: ServiceManager[] = [];
+  let savedState: string | null = null;
+
+  // Save and remove any pre-existing state file to isolate tests
+  beforeEach(() => {
+    try {
+      savedState = require("fs").readFileSync(STATE_FILE, "utf-8");
+      unlinkSync(STATE_FILE);
+    } catch {
+      savedState = null;
+    }
+  });
 
   afterEach(async () => {
-    // Stop all managers (each may own different processes)
     for (const m of managers) {
       await m.stopAll();
     }
     managers.length = 0;
     try { unlinkSync(STATE_FILE); } catch {}
+    // Restore original state file if one existed before tests
+    if (savedState !== null) {
+      require("fs").writeFileSync(STATE_FILE, savedState);
+    }
   });
 
   test("second manager reuses running service via state file + reachability", async () => {

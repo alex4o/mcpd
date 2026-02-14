@@ -119,7 +119,15 @@ export class ServiceManager {
     this.pids.set(name, proc.pid);
 
     if (config.transport === "sse" && config.readiness.check === "http") {
-      await this.waitForReady(name, config);
+      try {
+        await this.waitForReady(name, config);
+      } catch (err) {
+        // Kill the orphaned process before re-throwing
+        await this.stop(name);
+        this.states.set(name, "error");
+        this.saveState();
+        throw err;
+      }
     }
 
     this.states.set(name, "ready");
