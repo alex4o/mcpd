@@ -1,6 +1,6 @@
 import { parseArgs } from "util";
 import { loadConfig } from "./config.ts";
-import { ServiceManager } from "./service-manager.ts";
+import { ServiceManager, pidAlive } from "./service-manager.ts";
 import { BackendClient } from "./sse-client.ts";
 import { ToolAggregator } from "./aggregator.ts";
 import { createServer } from "./server.ts";
@@ -10,15 +10,6 @@ import { join } from "path";
 
 const PID_FILE = join(process.cwd(), ".mcpd.pid");
 
-function isRunning(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 // -- commands --
 
 async function cmdStart(configPath?: string) {
@@ -26,8 +17,6 @@ async function cmdStart(configPath?: string) {
   const manager = new ServiceManager();
   const aggregator = new ToolAggregator();
   const allMiddlewares: McpMiddleware[] = [];
-
-  writeFileSync(PID_FILE, String(process.pid));
 
   const cleanup = async () => {
     // Only stop services that don't have keep_alive set
@@ -43,6 +32,9 @@ async function cmdStart(configPath?: string) {
   process.on("SIGINT", cleanup);
 
   await manager.startAll(config);
+
+  // Write PID file only after successful startup
+  writeFileSync(PID_FILE, String(process.pid));
 
   for (const [name, svc] of Object.entries(config.services)) {
     if (svc.transport === "sse" && svc.url) {
@@ -62,7 +54,7 @@ function cmdPs() {
   // mcpd itself
   if (existsSync(PID_FILE)) {
     const pid = parseInt(readFileSync(PID_FILE, "utf-8").trim());
-    console.log(`mcpd         pid=${pid}  ${isRunning(pid) ? "running" : "dead (stale pid)"}`);
+    console.log(`mcpd         pid=${pid}  ${pidAlive(pid) ? "running" : "dead (stale pid)"}`);
   } else {
     console.log("mcpd         not running");
   }
@@ -74,7 +66,7 @@ function cmdPs() {
     return;
   }
   for (const [name, info] of Object.entries(state)) {
-    const alive = info.pid ? isRunning(info.pid) : false;
+    const alive = info.pid ? pidAlive(info.pid) : false;
     const pidStr = info.pid ? `pid=${info.pid}` : "no pid";
     const urlStr = info.url ? `url=${info.url}` : "";
     const status = alive ? "running" : info.state === "ready" ? "dead (stale)" : info.state;
@@ -104,7 +96,7 @@ function cmdKill(target?: string) {
       console.log(`${name}: no pid tracked`);
       continue;
     }
-    if (!isRunning(info.pid)) {
+    if (!pidAlive(info.pid)) {
       console.log(`${name}: pid ${info.pid} already dead`);
       continue;
     }
@@ -125,26 +117,41 @@ function cmdKill(target?: string) {
 }
 
 async function cmdRestart(target: string | undefined, configPath?: string) {
-  cmdKill(target);
-  await new Promise((r) => setTimeout(r, 1500));
-
   const config = loadConfig(configPath);
   const killAll = !target || target === "all";
-  const services = killAll
-    ? config.services
-    : { [target]: config.services[target] };
 
-  for (const [name, svc] of Object.entries(services)) {
+  if (!killAll && !config.services[target!]) {
+    console.error(`Unknown service: ${target}`);
+    process.exit(1);
+  }
+
+  // Kill existing processes from saved state
+  const state = ServiceManager.loadState();
+  const toRestart = killAll
+    ? Object.keys(config.services)
+    : [target!];
+
+  for (const name of toRestart) {
+    const info = state[name];
+    if (info?.pid && pidAlive(info.pid)) {
+      try {
+        process.kill(info.pid, "SIGTERM");
+        console.log(`${name}: killed pid ${info.pid}`);
+      } catch {}
+    }
+  }
+
+  // Brief wait for processes to exit
+  await new Promise((r) => setTimeout(r, 1000));
+
+  // Start services through ServiceManager (with readiness checks + state persistence)
+  const manager = new ServiceManager();
+  for (const name of toRestart) {
+    const svc = config.services[name];
     if (!svc?.command) continue;
     console.log(`${name}: starting...`);
-    const proc = Bun.spawn([svc.command, ...svc.args], {
-      cwd: svc.cwd,
-      env: { ...process.env, ...svc.env },
-      stdout: "inherit",
-      stderr: "inherit",
-    });
-    await proc.exited;
-    console.log(`${name}: started`);
+    await manager.start(name, svc);
+    console.log(`${name}: started (${manager.getState(name)})`);
   }
 }
 
@@ -171,7 +178,10 @@ switch (command) {
     cmdKill(target);
     break;
   case "restart":
-    cmdRestart(target, configPath);
+    cmdRestart(target, configPath).catch((err) => {
+      console.error("restart failed:", err.message);
+      process.exit(1);
+    });
     break;
   case "stop":
     cmdKill("all");

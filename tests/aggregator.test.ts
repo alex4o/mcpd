@@ -109,7 +109,7 @@ describe("ToolAggregator — multiple backends (prefixed)", () => {
 
     await expect(
       agg.routeToolCall("unknown_find_symbol", {})
-    ).rejects.toThrow("Unknown service");
+    ).rejects.toThrow("no matching service prefix");
   });
 });
 
@@ -139,6 +139,69 @@ describe("ToolAggregator — edge cases", () => {
     agg.addBackend("serena", mockClient([toolA]));
     agg.addBackend("db", mockClient([toolC]));
 
-    expect(() => agg.parseName("noseparator")).toThrow("expected service prefix");
+    expect(() => agg.parseName("noseparator")).toThrow("no matching service prefix");
+  });
+
+  test("parseName with no backends throws", () => {
+    const agg = new ToolAggregator();
+    expect(() => agg.parseName("anything")).toThrow("No backends registered");
+  });
+});
+
+describe("ToolAggregator — underscore service names", () => {
+  test("routes to service with underscores in name", async () => {
+    const agg = new ToolAggregator();
+    agg.addBackend("my_db", mockClient([toolC]));
+    agg.addBackend("serena", mockClient([toolA]));
+
+    const result = await agg.routeToolCall("my_db_run_query", { sql: "SELECT 1" });
+    expect(result.content[0]).toHaveProperty(
+      "text",
+      'Called run_query with {"sql":"SELECT 1"}'
+    );
+  });
+
+  test("parseName correctly splits underscore service name", () => {
+    const agg = new ToolAggregator();
+    agg.addBackend("my_db", mockClient([toolC]));
+    agg.addBackend("serena", mockClient([toolA]));
+
+    const { service, tool } = agg.parseName("my_db_run_query");
+    expect(service).toBe("my_db");
+    expect(tool).toBe("run_query");
+  });
+
+  test("prefers shortest matching prefix", () => {
+    const agg = new ToolAggregator();
+    // "a" and "a_b" are both backends; "a_b_tool" should match "a" first
+    // since we iterate left-to-right
+    agg.addBackend("a", mockClient([toolA]));
+    agg.addBackend("a_b", mockClient([toolC]));
+
+    const { service, tool } = agg.parseName("a_b_tool");
+    expect(service).toBe("a");
+    expect(tool).toBe("b_tool");
+  });
+
+  test("falls through to longer prefix when short prefix has no match", () => {
+    const agg = new ToolAggregator();
+    // Only "a_b" is a backend, not "a"
+    agg.addBackend("a_b", mockClient([toolC]));
+    agg.addBackend("serena", mockClient([toolA]));
+
+    const { service, tool } = agg.parseName("a_b_run_query");
+    expect(service).toBe("a_b");
+    expect(tool).toBe("run_query");
+  });
+
+  test("lists tools with underscore service prefix", async () => {
+    const agg = new ToolAggregator();
+    agg.addBackend("my_db", mockClient([toolC]));
+    agg.addBackend("serena", mockClient([toolA]));
+
+    const tools = await agg.listAllTools();
+    const names = tools.map((t) => t.name);
+    expect(names).toContain("my_db_run_query");
+    expect(names).toContain("serena_find_symbol");
   });
 });

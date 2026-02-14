@@ -52,20 +52,22 @@ export class ToolAggregator {
     if (!this.needsPrefix) {
       // Single backend — tool name is unprefixed, route to the only backend
       const [serviceName] = this.backends.keys();
-      return { service: serviceName!, tool: toolName };
+      if (!serviceName) throw new Error("No backends registered");
+      return { service: serviceName, tool: toolName };
     }
-    const idx = toolName.indexOf("_");
-    if (idx === -1) {
-      throw new Error(`Invalid tool name: ${toolName} (expected service prefix)`);
+    // Try each underscore position to find a matching service prefix.
+    // This handles service names containing underscores (e.g., "my_db_run_query" → "my_db" + "run_query").
+    let idx = 0;
+    while (true) {
+      idx = toolName.indexOf("_", idx);
+      if (idx === -1) break;
+      const prefix = toolName.slice(0, idx);
+      if (this.backends.has(prefix)) {
+        return { service: prefix, tool: toolName.slice(idx + 1) };
+      }
+      idx++;
     }
-    const service = toolName.slice(0, idx);
-    const tool = toolName.slice(idx + 1);
-    // Verify the service exists, otherwise try longer prefix
-    // (handles tool names that themselves contain underscores)
-    if (this.backends.has(service)) {
-      return { service, tool };
-    }
-    throw new Error(`Unknown service: ${service}`);
+    throw new Error(`Invalid tool name: ${toolName} (no matching service prefix)`);
   }
 
   async routeToolCall(
