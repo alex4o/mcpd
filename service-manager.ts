@@ -169,9 +169,22 @@ export class ServiceManager {
   }
 
   async startAll(config: McpdConfig): Promise<void> {
-    await Promise.all(
-      Object.entries(config.services).map(([name, svc]) => this.start(name, svc))
+    const entries = Object.entries(config.services);
+    const results = await Promise.allSettled(
+      entries.map(([name, svc]) => this.start(name, svc))
     );
+
+    const failed = results.filter((r) => r.status === "rejected");
+    if (failed.length > 0) {
+      // Roll back: stop any services that started successfully
+      await Promise.all(
+        entries
+          .filter((_, i) => results[i]!.status === "fulfilled")
+          .map(([name]) => this.stop(name))
+      );
+      const reasons = failed.map((r) => (r as PromiseRejectedResult).reason?.message ?? r);
+      throw new Error(`Failed to start services: ${reasons.join("; ")}`);
+    }
   }
 
   async stopAll(): Promise<void> {

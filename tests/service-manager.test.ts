@@ -148,6 +148,26 @@ describe("ServiceManager", () => {
     expect(after?.state).toBe("stopped");
   });
 
+  test("startAll rolls back on partial failure", async () => {
+    manager = new ServiceManager();
+    const goodConfig = makeConfig({ transport: "stdio" });
+    // Service that will fail readiness (nothing listens on this port)
+    const badConfig = makeConfig({
+      url: "http://localhost:19998/",
+      readiness: { check: "http", timeout: 500, interval: 100 },
+    });
+
+    await expect(
+      manager.startAll({
+        services: { good: goodConfig, bad: badConfig },
+      })
+    ).rejects.toThrow("Failed to start");
+
+    // The "good" service should have been rolled back (stopped)
+    expect(manager.getState("good")).toBe("stopped");
+    expect(manager.getState("bad")).toBe("error");
+  });
+
   test("restart clears old PID and assigns new one", async () => {
     manager = new ServiceManager();
     const config = makeConfig({ transport: "stdio" });
@@ -192,6 +212,10 @@ describe("Service reuse — no duplicate instances", () => {
     }
   });
 
+  // Use unique service names ("test-reuse") to avoid collision with
+  // production state written by the running mcpd instance.
+  const SVC = "test-reuse";
+
   test("second manager reuses running service via state file + reachability", async () => {
     const port = 19100 + Math.floor(Math.random() * 100);
     const config = makeConfig({
@@ -203,9 +227,9 @@ describe("Service reuse — no duplicate instances", () => {
     // Manager A starts the service (spawns the process)
     const managerA = new ServiceManager();
     managers.push(managerA);
-    await managerA.start("serena", config);
+    await managerA.start(SVC, config);
 
-    const infoA = managerA.getAll().find((s) => s.name === "serena");
+    const infoA = managerA.getAll().find((s) => s.name === SVC);
     expect(infoA?.state).toBe("ready");
     expect(infoA?.pid).toBeDefined();
     const originalPid = infoA!.pid!;
@@ -213,9 +237,9 @@ describe("Service reuse — no duplicate instances", () => {
     // Manager B (new instance, like a second Claude Code session) tries to start same service
     const managerB = new ServiceManager();
     managers.push(managerB);
-    await managerB.start("serena", config);
+    await managerB.start(SVC, config);
 
-    const infoB = managerB.getAll().find((s) => s.name === "serena");
+    const infoB = managerB.getAll().find((s) => s.name === SVC);
     expect(infoB?.state).toBe("ready");
     // B should reuse A's PID from the state file, not spawn a new process
     expect(infoB?.pid).toBe(originalPid);
@@ -250,9 +274,9 @@ describe("Service reuse — no duplicate instances", () => {
       // Manager sees the service is reachable and skips spawning
       const mgr = new ServiceManager();
       managers.push(mgr);
-      await mgr.start("serena", config);
+      await mgr.start(SVC, config);
 
-      const info = mgr.getAll().find((s) => s.name === "serena");
+      const info = mgr.getAll().find((s) => s.name === SVC);
       expect(info?.state).toBe("ready");
       // No PID tracked — manager didn't spawn this process
       expect(info?.pid).toBeUndefined();
@@ -276,8 +300,8 @@ describe("Service reuse — no duplicate instances", () => {
 
     // Start both concurrently — one will bind the port, the other's spawn will fail
     const [resultA, resultB] = await Promise.allSettled([
-      managerA.start("serena", config),
-      managerB.start("serena", config),
+      managerA.start(SVC, config),
+      managerB.start(SVC, config),
     ]);
 
     // At least one should succeed
@@ -301,9 +325,9 @@ describe("Service reuse — no duplicate instances", () => {
     // Manager A starts and then stops the service
     const managerA = new ServiceManager();
     managers.push(managerA);
-    await managerA.start("serena", config);
-    const pidA = managerA.getAll().find((s) => s.name === "serena")!.pid!;
-    await managerA.stop("serena");
+    await managerA.start(SVC, config);
+    const pidA = managerA.getAll().find((s) => s.name === SVC)!.pid!;
+    await managerA.stop(SVC);
 
     // Wait for the process to actually die
     const deadline = Date.now() + 3000;
@@ -315,9 +339,9 @@ describe("Service reuse — no duplicate instances", () => {
     // Manager B should NOT reuse the dead service — it should spawn a new one
     const managerB = new ServiceManager();
     managers.push(managerB);
-    await managerB.start("serena", config);
+    await managerB.start(SVC, config);
 
-    const infoB = managerB.getAll().find((s) => s.name === "serena");
+    const infoB = managerB.getAll().find((s) => s.name === SVC);
     expect(infoB?.state).toBe("ready");
     expect(infoB?.pid).toBeDefined();
     expect(infoB?.pid).not.toBe(pidA);
