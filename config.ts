@@ -67,12 +67,31 @@ const SERVICE_DEFAULTS = {
   },
 };
 
+const VALID_TRANSPORTS = ["sse", "stdio"] as const;
+const VALID_RESTART = ["on-failure", "always", "never"] as const;
+const VALID_READINESS_CHECK = ["http"] as const;
+
 function applyServiceDefaults(raw: any): ServiceConfig {
   if (!raw.command) throw new Error("Service must have a 'command' field");
 
+  const transport = raw.transport ?? SERVICE_DEFAULTS.transport;
+  if (!VALID_TRANSPORTS.includes(transport)) {
+    throw new Error(`Invalid transport '${transport}' (expected: ${VALID_TRANSPORTS.join(", ")})`);
+  }
+
+  const restart = raw.restart ?? SERVICE_DEFAULTS.restart;
+  if (!VALID_RESTART.includes(restart)) {
+    throw new Error(`Invalid restart policy '${restart}' (expected: ${VALID_RESTART.join(", ")})`);
+  }
+
   const readinessRaw = raw.readiness ?? {};
+  const check = readinessRaw.check ?? SERVICE_DEFAULTS.readiness.check;
+  if (!VALID_READINESS_CHECK.includes(check)) {
+    throw new Error(`Invalid readiness check '${check}' (expected: ${VALID_READINESS_CHECK.join(", ")})`);
+  }
+
   const readiness: ReadinessConfig = {
-    check: readinessRaw.check ?? SERVICE_DEFAULTS.readiness.check,
+    check,
     url: readinessRaw.url,
     timeout:
       typeof readinessRaw.timeout === "string"
@@ -87,12 +106,12 @@ function applyServiceDefaults(raw: any): ServiceConfig {
   return {
     command: raw.command,
     args: raw.args ?? SERVICE_DEFAULTS.args,
-    transport: raw.transport ?? SERVICE_DEFAULTS.transport,
+    transport,
     url: raw.url,
     env: raw.env,
     cwd: raw.cwd,
     readiness,
-    restart: raw.restart ?? SERVICE_DEFAULTS.restart,
+    restart,
     keep_alive: raw.keep_alive ?? SERVICE_DEFAULTS.keep_alive,
     middleware: raw.middleware,
   };

@@ -137,4 +137,35 @@ services:
       "strip-result-wrapper",
     ]);
   });
+
+  test("rejects invalid transport value", () => {
+    writeYaml(`
+services:
+  myservice:
+    command: node server.js
+    transport: websocket
+`);
+    expect(() => loadConfig(TMP_CONFIG)).toThrow("Invalid transport");
+  });
+
+  test("rejects invalid restart policy", () => {
+    writeYaml(`
+services:
+  myservice:
+    command: node server.js
+    restart: sometimes
+`);
+    expect(() => loadConfig(TMP_CONFIG)).toThrow("Invalid restart policy");
+  });
+
+  test("rejects invalid readiness check type", () => {
+    writeYaml(`
+services:
+  myservice:
+    command: node server.js
+    readiness:
+      check: tcp
+`);
+    expect(() => loadConfig(TMP_CONFIG)).toThrow("Invalid readiness check");
+  });
 });
