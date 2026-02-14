@@ -1,0 +1,11 @@
+{
+    "servers": {
+        "mcpd": {
+            "command": "bun",
+            "args": [
+                "run",
+                "index.ts"
+            ]
+        }
+    }
+}
