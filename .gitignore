@@ -40,6 +40,10 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 # mcpd runtime
 .mcpd.pid
 .mcpd-state.json
+mcpd
+
+# cgc local data
+.cgc/
 
 # test scratch files
 tests/tmp/
