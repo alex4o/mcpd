@@ -1,7 +1,7 @@
 import type { Subprocess } from "bun";
 import type { ServiceConfig, McpdConfig } from "./config.ts";
 import { findProjectRoot } from "./config.ts";
-import { writeFileSync, readFileSync, existsSync, unlinkSync } from "fs";
+import { writeFile, readFile, unlink } from "fs/promises";
 import { execSync } from "child_process";
 import { join } from "path";
 import log from "./logger.ts";
@@ -56,9 +56,10 @@ function resolvePort(url: string): string | null {
 }
 
 /** Get a process command line, preferring /proc and falling back to ps. */
-function getCommandLine(pid: number): string | null {
+async function getCommandLine(pid: number): Promise<string | null> {
   try {
-    return readFileSync(`/proc/${pid}/cmdline`, "utf-8").replace(/\0/g, " ").trim();
+    const buf = await readFile(`/proc/${pid}/cmdline`, "utf-8");
+    return buf.replace(/\0/g, " ").trim();
   } catch {
     try {
       return execSync(`ps -p ${pid} -o command=`, { encoding: "utf-8" }).trim();
@@ -75,7 +76,7 @@ function getCommandLine(pid: number): string | null {
  * Passing both command and args as hints handles wrapper launchers (e.g. uv)
  * where the listener process differs from the configured command.
  */
-function findPidByPort(url: string, commandHints?: string[]): number | null {
+async function findPidByPort(url: string, commandHints?: string[]): Promise<number | null> {
   try {
     const port = resolvePort(url);
     if (!port) return null;
@@ -86,7 +87,7 @@ function findPidByPort(url: string, commandHints?: string[]): number | null {
     if (!commandHints?.length) return pids[0]!;
 
     for (const pid of pids) {
-      const cmdline = getCommandLine(pid);
+      const cmdline = await getCommandLine(pid);
       if (cmdline && commandHints.some(hint => cmdline.includes(hint))) return pid;
     }
 
@@ -110,24 +111,24 @@ export class ServiceManager {
     // Check if already running — reuse existing instance
     if (config.transport === "sse" && config.url) {
       const checkUrl = config.readiness?.url ?? config.url;
-      const saved = ServiceManager.loadState()[name];
+      const saved = (await ServiceManager.loadState())[name];
 
       if (saved?.pid && pidAlive(saved.pid) && await isReachable(checkUrl)) {
         slog.info({ pid: saved.pid }, "reusing existing instance");
         this.pids.set(name, saved.pid);
         this.states.set(name, "ready");
-        this.saveState();
+        await this.saveState();
         return;
       }
 
       // No saved pid, but service might still be reachable (started externally)
       if (await isReachable(checkUrl)) {
         // Try to recover the PID via port lookup with command validation
-        const pid = findPidByPort(checkUrl, [config.command, ...config.args]);
+        const pid = await findPidByPort(checkUrl, [config.command, ...config.args]);
         if (pid) this.pids.set(name, pid);
         slog.info({ pid: pid ?? undefined }, "reusing externally-started instance");
         this.states.set(name, "ready");
-        this.saveState();
+        await this.saveState();
         return;
       }
     }
@@ -144,14 +145,14 @@ export class ServiceManager {
       env: { ...process.env, ...config.env },
       stdout: "ignore",
       stderr: "ignore",
-      onExit: (_proc, exitCode) => {
+      onExit: async (_proc, exitCode) => {
         this.services.delete(name);
         this.pids.delete(name);
         const currentState = this.states.get(name);
         if (currentState === "ready") {
           slog.error({ exitCode }, "service crashed while ready");
           this.states.set(name, "error");
-          this.saveState();
+          await this.saveState();
           if (config.restart === "on-failure" || config.restart === "always") {
             slog.info("restarting after crash");
             this.start(name, config).catch((e) => slog.error(e, "restart failed"));
@@ -161,7 +162,7 @@ export class ServiceManager {
         if (exitCode !== 0 && exitCode !== null) {
           slog.error({ exitCode }, "service exited with error");
           this.states.set(name, "error");
-          this.saveState();
+          await this.saveState();
           if (config.restart === "on-failure" || config.restart === "always") {
             slog.info("restarting after failure");
             this.start(name, config).catch((e) => slog.error(e, "restart failed"));
@@ -173,7 +174,7 @@ export class ServiceManager {
           } else if (currentState !== "starting") {
             slog.info("service stopped cleanly");
             this.states.set(name, "stopped");
-            this.saveState();
+            await this.saveState();
           }
         }
       },
@@ -191,14 +192,14 @@ export class ServiceManager {
         // Kill the orphaned process before re-throwing
         await this.stop(name);
         this.states.set(name, "error");
-        this.saveState();
+        await this.saveState();
         throw err;
       }
     }
 
     slog.info("service ready");
     this.states.set(name, "ready");
-    this.saveState();
+    await this.saveState();
   }
 
   async stop(name: string): Promise<void> {
@@ -227,7 +228,7 @@ export class ServiceManager {
     this.services.delete(name);
     this.pids.delete(name);
     this.states.set(name, "stopped");
-    this.saveState();
+    await this.saveState();
     slog.info("service stopped");
   }
 
@@ -262,7 +263,7 @@ export class ServiceManager {
     await Promise.all(
       [...this.services.keys()].map((name) => this.stop(name))
     );
-    this.cleanupState();
+    await this.cleanupState();
   }
 
   getState(name: string): ServiceState {
@@ -280,15 +281,31 @@ export class ServiceManager {
   }
 
   /** Register a PID for a service not directly managed by ServiceManager (e.g. stdio backends). */
-  registerPid(name: string, pid: number): void {
+  async registerPid(name: string, pid: number): Promise<void> {
     this.pids.set(name, pid);
     this.states.set(name, this.states.get(name) ?? "ready");
-    this.saveState();
+    await this.saveState();
+  }
+
+  /** Register a proxy process (pid + url) in state for ps/kill visibility. */
+  async registerProxy(name: string, pid: number, url: string): Promise<void> {
+    this.pids.set(name, pid);
+    this.urls.set(name, url);
+    this.states.set(name, "ready");
+    await this.saveState();
+  }
+
+  /** Remove a proxy entry from state (called on clean shutdown). */
+  async removeProxy(name: string): Promise<void> {
+    this.pids.delete(name);
+    this.urls.delete(name);
+    this.states.delete(name);
+    await this.saveState();
   }
 
   // -- state persistence --
 
-  saveState(): void {
+  async saveState(): Promise<void> {
     const state: Record<string, Omit<ServiceInfo, "name">> = {};
     const all = new Set([...this.services.keys(), ...this.states.keys()]);
     for (const name of all) {
@@ -299,27 +316,28 @@ export class ServiceManager {
       };
     }
     try {
-      writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
+      await writeFile(STATE_FILE, JSON.stringify(state, null, 2));
     } catch (err) {
       log.error(err as Error, "failed to save state");
     }
   }
 
-  private cleanupState(): void {
-    try { unlinkSync(STATE_FILE); } catch {}
+  private async cleanupState(): Promise<void> {
+    try { await unlink(STATE_FILE); } catch {}
   }
 
-  static loadState(): Record<string, ServiceInfo> {
-    if (!existsSync(STATE_FILE)) return {};
+  static async loadState(): Promise<Record<string, ServiceInfo>> {
     try {
-      const raw = JSON.parse(readFileSync(STATE_FILE, "utf-8"));
+      const raw = JSON.parse(await readFile(STATE_FILE, "utf-8"));
       const result: Record<string, ServiceInfo> = {};
       for (const [name, info] of Object.entries(raw as Record<string, any>)) {
         result[name] = { name, ...info };
       }
       return result;
     } catch (err) {
-      log.warn(err as Error, "failed to load state");
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+        log.warn({ error: (err as Error).message }, "failed to load state file");
+      }
       return {};
     }
   }

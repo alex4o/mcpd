@@ -3,7 +3,7 @@ import { ServiceManager, pidAlive } from "../service-manager.ts";
 import type { ServiceConfig } from "../config.ts";
 import { findProjectRoot } from "../config.ts";
 import { join } from "path";
-import { unlinkSync } from "fs";
+import { readFile, writeFile, unlink } from "fs/promises";
 
 const TEST_SERVER = join(import.meta.dir, "fixtures", "test-server.ts");
 const STATE_FILE = join(findProjectRoot(), ".mcpd-state.json");
@@ -191,10 +191,10 @@ describe("Service reuse — no duplicate instances", () => {
   let savedState: string | null = null;
 
   // Save and remove any pre-existing state file to isolate tests
-  beforeEach(() => {
+  beforeEach(async () => {
     try {
-      savedState = require("fs").readFileSync(STATE_FILE, "utf-8");
-      unlinkSync(STATE_FILE);
+      savedState = await readFile(STATE_FILE, "utf-8");
+      await unlink(STATE_FILE);
     } catch {
       savedState = null;
     }
@@ -205,10 +205,10 @@ describe("Service reuse — no duplicate instances", () => {
       await m.stopAll();
     }
     managers.length = 0;
-    try { unlinkSync(STATE_FILE); } catch {}
+    await unlink(STATE_FILE).catch(() => {});
     // Restore original state file if one existed before tests
     if (savedState !== null) {
-      require("fs").writeFileSync(STATE_FILE, savedState);
+      await writeFile(STATE_FILE, savedState);
     }
   });
 

@@ -34,6 +34,7 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 .DS_Store
 
 # Serena MCP server
+.serena/
 .serena.pid
 .serena.log
 
