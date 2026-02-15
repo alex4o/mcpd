@@ -6,6 +6,7 @@ import {
   stripResultWrapper,
   extractJsonResults,
   json5Format,
+  toon,
   resolveMiddleware,
 } from "../middleware.ts";
 
@@ -120,12 +121,13 @@ describe("applyMiddleware", () => {
 
 describe("resolveMiddleware", () => {
   test("resolves built-in middleware by name", () => {
-    const mws = resolveMiddleware(["strip-json-keys", "strip-result-wrapper", "extract-json-results", "json5"]);
-    expect(mws).toHaveLength(4);
+    const mws = resolveMiddleware(["strip-json-keys", "strip-result-wrapper", "extract-json-results", "json5", "toon"]);
+    expect(mws).toHaveLength(5);
     expect(mws[0]!.name).toBe("strip-json-keys");
     expect(mws[1]!.name).toBe("strip-result-wrapper");
     expect(mws[2]!.name).toBe("extract-json-results");
     expect(mws[3]!.name).toBe("json5");
+    expect(mws[4]!.name).toBe("toon");
   });
 
   test("throws on unknown middleware", () => {
@@ -181,6 +183,81 @@ describe("json5Format", () => {
     const text = (processed.content[0] as any).text;
     expect(text).toContain("desc:");
     expect(text).toContain('set "mode": true');
+  });
+});
+
+describe("toon", () => {
+  test("converts JSON object to TOON indentation format", () => {
+    const result = textResult('{"name": "Alice", "age": 30}');
+    const processed = toon.response!("test", result);
+    const text = (processed.content[0] as any).text;
+    expect(text).toContain("name: Alice");
+    expect(text).toContain("age: 30");
+  });
+
+  test("converts JSON array to TOON tabular format", () => {
+    const input = JSON.stringify([
+      { id: 1, name: "Alice" },
+      { id: 2, name: "Bob" },
+    ]);
+    const result = textResult(input);
+    const processed = toon.response!("test", result);
+    const text = (processed.content[0] as any).text;
+    expect(text).toContain("{id,name}");
+    expect(text).toContain("1,Alice");
+    expect(text).toContain("2,Bob");
+  });
+
+  test("handles nested objects", () => {
+    const input = JSON.stringify({
+      user: { name: "Alice", address: { city: "NYC" } },
+    });
+    const result = textResult(input);
+    const processed = toon.response!("test", result);
+    const text = (processed.content[0] as any).text;
+    expect(text).toContain("Alice");
+    expect(text).toContain("NYC");
+  });
+
+  test("passes through non-JSON text unchanged", () => {
+    const result = textResult("just plain text");
+    const processed = toon.response!("test", result);
+    expect(processed.content[0]).toHaveProperty("text", "just plain text");
+  });
+
+  test("passes through primitive JSON values unchanged", () => {
+    const result = textResult("42");
+    const processed = toon.response!("test", result);
+    expect(processed.content[0]).toHaveProperty("text", "42");
+  });
+
+  test("passes through JSON string values unchanged", () => {
+    const result = textResult('"hello"');
+    const processed = toon.response!("test", result);
+    expect(processed.content[0]).toHaveProperty("text", '"hello"');
+  });
+
+  test("passes through non-text content unchanged", () => {
+    const result = {
+      content: [{ type: "image" as const, data: "abc", mimeType: "image/png" }],
+    };
+    const processed = toon.response!("test", result);
+    expect(processed).toEqual(result);
+  });
+
+  test("extract-json-results then toon pipeline works", () => {
+    const input = textResult(JSON.stringify({
+      results: [{ id: 1, name: "a" }, { id: 2, name: "b" }]
+    }));
+    const result = applyMiddleware(
+      [extractJsonResults, toon],
+      "tool",
+      input
+    );
+    const text = (result.content[0] as any).text;
+    expect(text).toContain("{id,name}");
+    expect(text).toContain("1,a");
+    expect(text).toContain("2,b");
   });
 });
 

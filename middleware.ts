@@ -1,5 +1,6 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import JSON5 from "json5";
+import { encode as toonEncode } from "@toon-format/toon";
 
 export interface McpMiddleware {
   name: string;
@@ -87,11 +88,24 @@ export const json5Format = defineMiddleware({
   },
 });
 
+export const toon = defineMiddleware({
+  name: "toon",
+  response(_toolName, result) {
+    return mapTextBlocks(result, (text) =>
+      tryJsonTransform(text, (parsed) => {
+        if (typeof parsed !== "object" || parsed === null) return null;
+        return toonEncode(parsed);
+      }),
+    );
+  },
+});
+
 const BUILTIN_MIDDLEWARES: Record<string, McpMiddleware> = {
   "strip-json-keys": stripJsonKeys,
   "strip-result-wrapper": stripResultWrapper,
   "extract-json-results": extractJsonResults,
   "json5": json5Format,
+  "toon": toon,
 };
 
 export function resolveMiddleware(
