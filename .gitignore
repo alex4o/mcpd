@@ -41,6 +41,7 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 .mcpd.pid
 .mcpd-state.json
 mcpd
+mcpd.log
 
 # cgc local data
 .cgc/

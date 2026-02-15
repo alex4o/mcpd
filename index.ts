@@ -7,6 +7,7 @@ import { createServer } from "./server.ts";
 import { resolveMiddleware, type McpMiddleware } from "./middleware.ts";
 import { writeFileSync, readFileSync, existsSync, unlinkSync } from "fs";
 import { join } from "path";
+import log from "./logger.ts";
 
 const PID_FILE = join(findProjectRoot(), ".mcpd.pid");
 
@@ -33,12 +34,14 @@ function killServiceByPid(name: string, info: { pid?: number }): void {
 
 async function cmdStart(configPath?: string) {
   const config = loadConfig(configPath);
+  log.info({ services: Object.keys(config.services) }, "config loaded");
   const manager = new ServiceManager();
   const aggregator = new ToolAggregator();
   const serviceMiddlewares = new Map<string, McpMiddleware[]>();
   const clients: BackendClient[] = [];
 
   const cleanup = async () => {
+    log.info("shutting down");
     // Disconnect all backend clients (stdio clients kill their child process)
     await Promise.all(clients.map((c) => c.disconnect().catch(() => {})));
     // Only stop services that don't have keep_alive set
@@ -236,6 +239,7 @@ switch (command) {
     break;
   case "restart":
     cmdRestart(target, configPath).catch((err) => {
+      log.error(err, "restart failed");
       console.error("restart failed:", err.message);
       process.exit(1);
     });
@@ -246,6 +250,7 @@ switch (command) {
   case "start":
   default:
     cmdStart(configPath).catch((err) => {
+      log.error(err, "mcpd failed to start");
       console.error("mcpd failed to start:", err.message);
       process.exit(1);
     });

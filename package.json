@@ -4,6 +4,7 @@
   "type": "module",
   "private": true,
   "scripts": {
+    "postinstall": "cd node_modules/bun-logger && bun build ./src/index.ts --outdir ./dist --target bun",
     "compile": "bun build --compile index.ts --outfile=mcpd",
     "move-local": "cp mcpd ~/.local/bin/"
   },
@@ -15,6 +16,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.26.0",
+    "bun-logger": "github:RedEagle-dh/bun-logger",
     "zod": "^4.3.6"
   }
 }

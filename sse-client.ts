@@ -2,18 +2,23 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import type { Tool, CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import log from "./logger.ts";
 
 export class BackendClient {
   private client: Client;
   private transport: SSEClientTransport | StdioClientTransport | null = null;
+  private slog;
 
   constructor(name: string) {
     this.client = new Client({ name: `mcpd-${name}`, version: "1.0.0" });
+    this.slog = log.child({ service: name });
   }
 
   async connect(url: string): Promise<void> {
+    this.slog.info({ url }, "connecting via SSE");
     this.transport = new SSEClientTransport(new URL(url));
     await this.client.connect(this.transport);
+    this.slog.info("SSE connected");
   }
 
   async connectStdio(
@@ -21,6 +26,7 @@ export class BackendClient {
     args: string[],
     opts?: { cwd?: string; env?: Record<string, string> }
   ): Promise<void> {
+    this.slog.info({ command, args }, "connecting via stdio");
     this.transport = new StdioClientTransport({
       command,
       args,
@@ -31,6 +37,7 @@ export class BackendClient {
       stderr: "ignore",
     });
     await this.client.connect(this.transport);
+    this.slog.info("stdio connected");
   }
 
   async listTools(): Promise<Tool[]> {
@@ -68,6 +75,7 @@ export class BackendClient {
   }
 
   async disconnect(): Promise<void> {
+    this.slog.info("disconnecting");
     await this.client.close();
   }
 }

@@ -4,6 +4,7 @@ import { findProjectRoot } from "./config.ts";
 import { writeFileSync, readFileSync, existsSync, unlinkSync } from "fs";
 import { execSync } from "child_process";
 import { join } from "path";
+import log from "./logger.ts";
 
 export type ServiceState = "stopped" | "starting" | "ready" | "error";
 
@@ -38,8 +39,9 @@ async function isReachable(url: string, timeoutMs = 5000): Promise<boolean> {
     controller.abort(); // Stop reading body (SSE streams stay open)
     clearTimeout(timer);
     return resp.ok;
-  } catch {
+  } catch (err) {
     clearTimeout(timer);
+    log.debug({ url, error: (err as Error).message }, "reachability check failed");
     return false;
   }
 }
@@ -102,6 +104,7 @@ export class ServiceManager {
   private urls = new Map<string, string>();
 
   async start(name: string, config: ServiceConfig): Promise<void> {
+    const slog = log.child({ service: name });
     if (config.url) this.urls.set(name, config.url);
 
     // Check if already running — reuse existing instance
@@ -110,6 +113,7 @@ export class ServiceManager {
       const saved = ServiceManager.loadState()[name];
 
       if (saved?.pid && pidAlive(saved.pid) && await isReachable(checkUrl)) {
+        slog.info({ pid: saved.pid }, "reusing existing instance");
         this.pids.set(name, saved.pid);
         this.states.set(name, "ready");
         this.saveState();
@@ -121,6 +125,7 @@ export class ServiceManager {
         // Try to recover the PID via port lookup with command validation
         const pid = findPidByPort(checkUrl, [config.command, ...config.args]);
         if (pid) this.pids.set(name, pid);
+        slog.info({ pid: pid ?? undefined }, "reusing externally-started instance");
         this.states.set(name, "ready");
         this.saveState();
         return;
@@ -131,6 +136,7 @@ export class ServiceManager {
       throw new Error(`Service '${name}' is already running`);
     }
 
+    slog.info({ command: config.command, args: config.args }, "starting service");
     this.states.set(name, "starting");
 
     const proc = Bun.spawn([config.command, ...config.args], {
@@ -143,23 +149,29 @@ export class ServiceManager {
         this.pids.delete(name);
         const currentState = this.states.get(name);
         if (currentState === "ready") {
+          slog.error({ exitCode }, "service crashed while ready");
           this.states.set(name, "error");
           this.saveState();
           if (config.restart === "on-failure" || config.restart === "always") {
-            this.start(name, config).catch(() => {});
+            slog.info("restarting after crash");
+            this.start(name, config).catch((e) => slog.error(e, "restart failed"));
           }
           return;
         }
         if (exitCode !== 0 && exitCode !== null) {
+          slog.error({ exitCode }, "service exited with error");
           this.states.set(name, "error");
           this.saveState();
           if (config.restart === "on-failure" || config.restart === "always") {
-            this.start(name, config).catch(() => {});
+            slog.info("restarting after failure");
+            this.start(name, config).catch((e) => slog.error(e, "restart failed"));
           }
         } else {
           if (config.restart === "always") {
-            this.start(name, config).catch(() => {});
+            slog.info("restarting (always policy)");
+            this.start(name, config).catch((e) => slog.error(e, "restart failed"));
           } else if (currentState !== "starting") {
+            slog.info("service stopped cleanly");
             this.states.set(name, "stopped");
             this.saveState();
           }
@@ -169,11 +181,13 @@ export class ServiceManager {
 
     this.services.set(name, { proc, config });
     this.pids.set(name, proc.pid);
+    slog.info({ pid: proc.pid }, "process spawned");
 
     if (config.transport === "sse" && config.readiness.check === "http") {
       try {
         await this.waitForReady(name, config);
       } catch (err) {
+        slog.error(err as Error, "readiness check failed");
         // Kill the orphaned process before re-throwing
         await this.stop(name);
         this.states.set(name, "error");
@@ -182,6 +196,7 @@ export class ServiceManager {
       }
     }
 
+    slog.info("service ready");
     this.states.set(name, "ready");
     this.saveState();
   }
@@ -190,9 +205,11 @@ export class ServiceManager {
     const svc = this.services.get(name);
     if (!svc) return;
 
+    const slog = log.child({ service: name, pid: svc.proc.pid });
     const origRestart = svc.config.restart;
     svc.config.restart = "never";
 
+    slog.info("sending SIGTERM");
     svc.proc.kill("SIGTERM");
 
     const exited = await Promise.race([
@@ -201,6 +218,7 @@ export class ServiceManager {
     ]);
 
     if (!exited) {
+      slog.warn("SIGTERM timeout, escalating to SIGKILL");
       svc.proc.kill("SIGKILL");
       await svc.proc.exited;
     }
@@ -210,6 +228,7 @@ export class ServiceManager {
     this.pids.delete(name);
     this.states.set(name, "stopped");
     this.saveState();
+    slog.info("service stopped");
   }
 
   async restart(name: string): Promise<void> {
@@ -281,7 +300,9 @@ export class ServiceManager {
     }
     try {
       writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
-    } catch {}
+    } catch (err) {
+      log.error(err as Error, "failed to save state");
+    }
   }
 
   private cleanupState(): void {
@@ -297,7 +318,8 @@ export class ServiceManager {
         result[name] = { name, ...info };
       }
       return result;
-    } catch {
+    } catch (err) {
+      log.warn(err as Error, "failed to load state");
       return {};
     }
   }
@@ -308,6 +330,9 @@ export class ServiceManager {
     const url = config.readiness.url ?? config.url;
     if (!url) throw new Error(`Service '${name}': no URL for readiness check`);
 
+    const slog = log.child({ service: name });
+    slog.info({ url, timeout: config.readiness.timeout }, "polling for readiness");
+
     const deadline = Date.now() + config.readiness.timeout;
 
     while (Date.now() < deadline) {
@@ -316,6 +341,7 @@ export class ServiceManager {
     }
 
     this.states.set(name, "error");
+    slog.error({ url, timeout: config.readiness.timeout }, "readiness check timed out");
     throw new Error(
       `Service '${name}' readiness check timed out after ${config.readiness.timeout}ms`
     );

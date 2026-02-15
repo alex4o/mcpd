@@ -1,5 +1,6 @@
 import type { Tool, CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { BackendClient } from "./sse-client.ts";
+import log from "./logger.ts";
 
 export interface NamespacedTool extends Tool {
   _service: string;
@@ -80,6 +81,7 @@ export class ToolAggregator {
     if (bestIdx !== -1) {
       return { service: toolName.slice(0, bestIdx), tool: toolName.slice(bestIdx + 1) };
     }
+    log.error({ toolName }, "no matching service prefix for tool");
     throw new Error(`Invalid tool name: ${toolName} (no matching service prefix)`);
   }
 
@@ -90,6 +92,7 @@ export class ToolAggregator {
     const { service, tool } = this.parseName(toolName);
     const client = this.backends.get(service);
     if (!client) {
+      log.error({ service, toolName }, "unknown service for tool call");
       throw new Error(`Unknown service: ${service}`);
     }
     return client.callTool(tool, args);

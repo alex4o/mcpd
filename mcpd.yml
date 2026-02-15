@@ -14,12 +14,12 @@ services:
       - --transport
       - sse
       - --port
-      - "8766"
+      - "8767"
     transport: sse
-    url: http://localhost:8766/sse
+    url: http://localhost:8767/sse
     readiness:
       check: http
-      url: http://localhost:8766/sse
+      url: http://localhost:8767/sse
       timeout: 60s
       interval: 500ms
     restart: on-failure
