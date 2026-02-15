@@ -17,6 +17,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.26.0",
     "bun-logger": "github:RedEagle-dh/bun-logger",
+    "json5": "^2.2.3",
     "zod": "^4.3.6"
   }
 }

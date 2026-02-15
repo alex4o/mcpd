@@ -1,4 +1,5 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import JSON5 from "json5";
 
 export interface McpMiddleware {
   name: string;
@@ -77,10 +78,20 @@ export const extractJsonResults = defineMiddleware({
   },
 });
 
+export const json5Format = defineMiddleware({
+  name: "json5",
+  response(_toolName, result) {
+    return mapTextBlocks(result, (text) =>
+      tryJsonTransform(text, (parsed) => JSON5.stringify(parsed)),
+    );
+  },
+});
+
 const BUILTIN_MIDDLEWARES: Record<string, McpMiddleware> = {
   "strip-json-keys": stripJsonKeys,
   "strip-result-wrapper": stripResultWrapper,
   "extract-json-results": extractJsonResults,
+  "json5": json5Format,
 };
 
 export function resolveMiddleware(
